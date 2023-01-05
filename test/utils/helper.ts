@@ -1,13 +1,13 @@
 import { ethers, BigNumber} from "ethers";
-import { Wallet, Provider, Contract, utils } from "zksync-web3";
+import { Wallet } from "zksync-web3";
 
 export const toBN = (x: string): BigNumber => {
     return ethers.utils.parseEther(x)
 }
 
-export const Tx = (user1:Wallet, value:string) => {
+export const Tx = (wallet:Wallet, value:string) => {
     return {
-        to: user1.address,
+        to: wallet.address,
         value: ethers.utils.parseEther(value),
         data: "0x",
     }
@@ -18,7 +18,7 @@ export async function consoleLimit(limit) {
       '\n',
       '"Limit"', '\n',
       '- Limit: ', limit.limit.toString(), '\n',
-      '- Spent: ', limit.spent.toString(), '\n',
+      '- Available: ', limit.available.toString(), '\n',
       '- Reset Time: ', limit.resetTime.toString(), '\n',
       '- Now: ', (Math.floor(Date.now() / 1000)).toString(), '\n',
       '- isEnabled: ', limit.isEnabled.toString(), '\n',
@@ -26,13 +26,12 @@ export async function consoleLimit(limit) {
     )
   }
 
-export async function consoleAddreses(wallet, factory, spendLimit, account, user1, user2) {
+export async function consoleAddreses(wallet, factory, account, user1, user2) {
     console.log(
         '\n',
         '-- Addresses -- ','\n',
         '- Wallet: ', wallet.address, '\n',
         '- Factory: ', factory.address, '\n',
-        '- SpendLimit: ', spendLimit.address, '\n',
         '- Account: ', account.address, '\n',
         '- User1: ', user1.address, '\n',
         '- User2: ', user2.address, '\n',

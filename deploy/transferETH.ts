@@ -4,7 +4,6 @@ import { HardhatRuntimeEnvironment } from 'hardhat/types';
 
 const ETH_ADDRESS = "0x000000000000000000000000000000000000800A"
 const MULTISIG_ADDRESS = '<MULTISIG_ADDRESS>'
-const SPENDLIMIT_ADDRESS = '<SPEND_LIMIT_ADDRESS>'
 
 export default async function (hre: HardhatRuntimeEnvironment) { 
   const provider = new Provider('https://zksync2-testnet.zksync.dev');
@@ -23,7 +22,7 @@ export default async function (hre: HardhatRuntimeEnvironment) {
         } as types.Eip712Meta,
         value: ethers.utils.parseEther("0.0051"), // 0.0051 fails but 0.0049 succeeds
         gasPrice: await provider.getGasPrice(),
-        gasLimit: ethers.BigNumber.from(5000000), // contant 5M since estimateGas() causes constant error
+        gasLimit: ethers.BigNumber.from(10000000), // contant 10M since estimateGas() causes an error
         data: "0x"
       }
     
@@ -41,13 +40,11 @@ export default async function (hre: HardhatRuntimeEnvironment) {
       const sentTx = await provider.sendTransaction(utils.serialize(ethTransferTx));
       await sentTx.wait();
 
-  const spendLimitArtifact = await hre.artifacts.readArtifact('SpendLimit');
-  const spendLimit = new Contract(SPENDLIMIT_ADDRESS, spendLimitArtifact.abi, wallet)
+  const multisigArtifact= await hre.artifacts.readArtifact('TwoUserMultisig');
+  const multisig = new Contract(MULTISIG_ADDRESS, multisigArtifact.abi, wallet)
 
-  const limit = await spendLimit.getLimit(MULTISIG_ADDRESS, ETH_ADDRESS)
+  const limit = await multisig.limits(ETH_ADDRESS)
   console.log("limit: ", limit.limit.toString())
   console.log("available: ", limit.available.toString())
-  console.log("resetTime: ", limit.resetTime.toString())
-  console.log("Enabled: ", limit.isEnabled)
 
 }

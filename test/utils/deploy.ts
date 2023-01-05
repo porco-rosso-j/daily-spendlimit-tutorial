@@ -11,24 +11,19 @@ export async function deployAAFactory(deployer: Deployer): Promise<Contract> {
     return await deployer.deploy(factoryArtifact, [bytecodeHash], undefined, [accountArtifact.bytecode]);
     }
 
-export async function deploySpendLimit(deployer: Deployer): Promise<Contract> {
-  const artifact = await deployer.loadArtifact("SpendLimit");
-  return await deployer.deploy(artifact);
-}
-
-export async function deployAccount(deployer: Deployer, wallet: Wallet, owner1: Wallet, owner2: Wallet, factory_address:string, spendlimit_address:string): Promise<Contract> {
+export async function deployAccount(deployer: Deployer, wallet: Wallet, owner1: Wallet, owner2: Wallet, factory_address:string): Promise<Contract> {
     const factoryArtifact = await hre.artifacts.readArtifact("AAFactory");
     const factory = new ethers.Contract(factory_address, factoryArtifact.abi, wallet);
   
     const salt = ethers.constants.HashZero;
-    await(await factory.deployAccount(salt, owner1.address, owner2.address, spendlimit_address)).wait()
+    await(await factory.deployAccount(salt, owner1.address, owner2.address)).wait()
   
     const AbiCoder = new ethers.utils.AbiCoder();
     const account_address = utils.create2Address(
         factory.address,
         await factory.aaBytecodeHash(),
         salt,
-        AbiCoder.encode(["address", "address", "address"], [owner1.address, owner2.address, spendlimit_address])
+        AbiCoder.encode(["address", "address"], [owner1.address, owner2.address])
     );
   
     const accountArtifact = await deployer.loadArtifact("TwoUserMultisig");

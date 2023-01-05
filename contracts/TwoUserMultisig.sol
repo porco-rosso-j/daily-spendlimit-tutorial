@@ -9,11 +9,10 @@ import "@matterlabs/zksync-contracts/l2/system-contracts/Constants.sol";
 import "@matterlabs/zksync-contracts/l2/system-contracts/SystemContractsCaller.sol";
 import "./SpendLimit.sol";
 
-contract TwoUserMultisig is IAccount, IERC1271 {
+contract TwoUserMultisig is IAccount, IERC1271, SpendLimit {
 
     using TransactionHelper for Transaction;
-
-    ISpendLimit public spendLimit;
+    
     address public owner1;
     address public owner2;
 
@@ -28,10 +27,9 @@ contract TwoUserMultisig is IAccount, IERC1271 {
         _;
     }
 
-    constructor(address _owner1, address _owner2, ISpendLimit _spendLimit) {
+    constructor(address _owner1, address _owner2) {
         owner1 = _owner1;
         owner2 = _owner2;
-        spendLimit = _spendLimit;
     }
 
     function validateTransaction(
@@ -80,7 +78,6 @@ contract TwoUserMultisig is IAccount, IERC1271 {
     }
 
     function _executeTransaction(Transaction calldata _transaction) internal {
-        address from = address(uint160(_transaction.from));
         address to = address(uint160(_transaction.to));
         uint256 value = _transaction.reserved[1];
         bytes memory data = _transaction.data;
@@ -88,7 +85,7 @@ contract TwoUserMultisig is IAccount, IERC1271 {
         // Call SpendLimit contract to make sure that ETH `value` doesn't exceed
         // the daily spending limit for specific token which this account enabled
         if ( value > 0 ) {
-            spendLimit.checkSpendingLimit(from, address(ETH_TOKEN_SYSTEM_CONTRACT), value);
+           _checkSpendingLimit(address(ETH_TOKEN_SYSTEM_CONTRACT), value);
         } 
         
         if (to == address(DEPLOYER_SYSTEM_CONTRACT)) {

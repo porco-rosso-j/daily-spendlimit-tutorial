@@ -14,8 +14,7 @@ contract AAFactory {
     function deployAccount(
         bytes32 salt,
         address owner1,
-        address owner2,
-        address spendinglimit
+        address owner2
     ) external returns (address accountAddress) {
         (bool success, bytes memory returnData) = SystemContractsCaller
             .systemCallWithReturndata(
@@ -24,7 +23,7 @@ contract AAFactory {
                 uint128(0),
                 abi.encodeCall(
                     DEPLOYER_SYSTEM_CONTRACT.create2Account,
-                    (salt, aaBytecodeHash, abi.encode(owner1, owner2, spendinglimit))
+                    (salt, aaBytecodeHash, abi.encode(owner1, owner2))
                 )
             );
         require(success, "Deployment failed");

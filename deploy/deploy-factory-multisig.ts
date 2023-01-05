@@ -3,11 +3,9 @@ import * as ethers from 'ethers';
 import { HardhatRuntimeEnvironment } from 'hardhat/types';
 import { Deployer } from '@matterlabs/hardhat-zksync-deploy';
 
-const SPEND_LIMIT_ADDRESS = '<SPEND_LIMIT_ADDRESS>';
-
 export default async function (hre: HardhatRuntimeEnvironment) {
   const provider = new Provider('https://zksync2-testnet.zksync.dev');
-  const wallet = new Wallet('<WALLET_PRIVATE_KEY>');
+  const wallet = new Wallet('<WALLET_PRIVATE_KEY>', provider);
   const deployer = new Deployer(hre, wallet);
   const factoryArtifact = await deployer.loadArtifact('AAFactory');
   const aaArtifact = await deployer.loadArtifact('TwoUserMultisig');
@@ -48,8 +46,7 @@ export default async function (hre: HardhatRuntimeEnvironment) {
   const tx = await aaFactory.deployAccount(
     salt,
     owner1.address,
-    owner2.address,
-    SPEND_LIMIT_ADDRESS
+    owner2.address
   );
   await tx.wait();
 
@@ -59,23 +56,22 @@ export default async function (hre: HardhatRuntimeEnvironment) {
     factory.address,
     await aaFactory.aaBytecodeHash(),
     salt,
-    // SPEND_LIMIT_ADDRESS as the third constructor argument to MultiSig contract
-    abiCoder.encode(['address', 'address', 'address'], [owner1.address, owner2.address, SPEND_LIMIT_ADDRESS])
+
+    abiCoder.encode(['address', 'address'], [owner1.address, owner2.address])
   );
 
   console.log(`Multisig deployed on address ${multisigAddress}`);
 
     await (await wallet.sendTransaction({
       to: multisigAddress,
-      value: ethers.utils.parseEther('0.01'),
+      value: ethers.utils.parseEther('0.03'),
     })
   ).wait();
 
   let aaTx = await aaFactory.populateTransaction.deployAccount(
     salt,
     Wallet.createRandom().address,
-    Wallet.createRandom().address,
-    SPEND_LIMIT_ADDRESS
+    Wallet.createRandom().address
   );
 
   const gasLimit = await provider.estimateGas(aaTx);
@@ -106,17 +102,7 @@ export default async function (hre: HardhatRuntimeEnvironment) {
     customSignature: signature,
   };
 
-  console.log(
-    `The multisig's nonce before the first tx is ${await provider.getTransactionCount(
-      multisigAddress
-    )}`
-  );
   const sentTx = await provider.sendTransaction(utils.serialize(aaTx));
   await sentTx.wait();
 
-  console.log(
-    `The multisig's nonce after the first tx is ${await provider.getTransactionCount(
-      multisigAddress
-    )}`
-  );
 }

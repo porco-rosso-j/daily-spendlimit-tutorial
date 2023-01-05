@@ -4,7 +4,6 @@ import { HardhatRuntimeEnvironment } from 'hardhat/types';
 
 const ETH_ADDRESS = "0x000000000000000000000000000000000000800A"
 const MULTISIG_ADDRESS = '<MULTISIG_ADDRESS>'
-const SPENDLIMIT_ADDRESS = '<SPEND_LIMIT_ADDRESS>'
 
 export default async function (hre: HardhatRuntimeEnvironment) { 
   const provider = new Provider('https://zksync2-testnet.zksync.dev');
@@ -12,11 +11,11 @@ export default async function (hre: HardhatRuntimeEnvironment) {
   const owner1 = new Wallet('<OWNER1_PRIVATE_KEY>', provider)
   const owner2 = new Wallet('<OWNER2_PRIVATE_KEY>', provider)
   
-  const spendLimitArtifact = await hre.artifacts.readArtifact('SpendLimit');
-  const spendLimit = new Contract(SPENDLIMIT_ADDRESS, spendLimitArtifact.abi, wallet)
+  const multisigArtifact= await hre.artifacts.readArtifact('TwoUserMultisig');
+  const multisig = new Contract(MULTISIG_ADDRESS, multisigArtifact.abi, wallet)
 
-  let setLimitTx = await spendLimit.populateTransaction.setSpendingLimit(
-    MULTISIG_ADDRESS, ETH_ADDRESS, ethers.utils.parseEther("0.005")
+  let setLimitTx = await multisig.populateTransaction.setSpendingLimit(
+    ETH_ADDRESS, ethers.utils.parseEther("0.005")
     )
 
   setLimitTx = {
@@ -48,7 +47,7 @@ export default async function (hre: HardhatRuntimeEnvironment) {
   const sentTx = await provider.sendTransaction(utils.serialize(setLimitTx));
   await sentTx.wait();
 
-  const limit = await spendLimit.getLimit(MULTISIG_ADDRESS, ETH_ADDRESS)
+  const limit = await multisig.limits(ETH_ADDRESS)
   console.log("limit: ", limit.limit.toString())
   console.log("available: ", limit.available.toString())
   console.log("resetTime: ", limit.resetTime.toString())
