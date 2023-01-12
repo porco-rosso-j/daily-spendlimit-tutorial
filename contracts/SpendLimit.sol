@@ -35,7 +35,7 @@ contract SpendLimit {
         require(_amount != 0, "Invalid amount");
 
         uint resetTime;
-        uint timestamp = block.timestamp;
+        uint timestamp = block.timestamp; // L1 batch timestamp
 
         if (isValidUpdate(_token)) {
             resetTime = timestamp + ONE_DAY;
@@ -86,15 +86,15 @@ contract SpendLimit {
         // return if spending limit hasn't been enabled yet
         if(!limit.isEnabled) return;
 
-        uint timestamp = block.timestamp; // l1BatchTimestamp
+        uint timestamp = block.timestamp; // L1 batch timestamp
 
-        // Renew resetTime and available amount, which is only performed...
-        // either if a day has already passed: timestamp > resetTime,
-        // or at the first spending after enabling limit
+        // Renew resetTime and available amount, which is only performed
+        // if a day has already passed since the last update : timestamp > resetTime
         if (limit.limit != limit.available && timestamp > limit.resetTime) {
             limit.resetTime = timestamp + ONE_DAY;
             limit.available = limit.limit;
 
+        // Or only resetTime is updated if it's the first spending after enabling limit
         } else if (limit.limit == limit.available) {
             limit.resetTime = timestamp + ONE_DAY;
         }
