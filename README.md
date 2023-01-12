@@ -8,7 +8,7 @@ Deployed Account contract that has the daily spending limit feature: [0x6b6B8ea1
 
 ## Deployment & Test
 
-### zkSync2.0 testnet
+### zkSync2 testnet
 
 As for deployment and simple test on zkSync2.0 testnet, please take a look at the tutorial doc, TUTORIAL.md.
 
