@@ -53,7 +53,6 @@ export default async function (hre: HardhatRuntimeEnvironment) {
          console.log("limit: ", limit.limit.toString())
          console.log("available: ", limit.available.toString())
          console.log("resetTime: ", limit.resetTime.toString())
-         console.log("Enabled: ", limit.isEnabled)
 
          return;
       } else {
