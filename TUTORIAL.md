@@ -542,7 +542,7 @@ contract AAFactory {
 }
 ```
 
-## Deploying the smart contract
+## Deploying smart contract
 
 ### Compile
 
@@ -848,9 +848,8 @@ l1TimeStamp:  1673530137
 resetTime:  1673529801
 limit:  5000000000000000
 available: 2000000000000000 // 0.005 - 0.003 = 0.002
-
+New resetTime: 1673530575
 ```
-
 Otherwise, we will probably see the output mostly like below. 
 
 ```shell
