@@ -148,7 +148,7 @@ Both `setSpendingLimit` and `removeSpendingLimit` can only be called by account 
 
 `setSpendingLimit` enables a non-zero daily spending limit for a specific token, and `removeSpendingLimit` disables the active daily spending limit, decreasing `limit` and `available` to 0 and setting `isEnabled` false.
 
-`_isValidUpdate` returns false if the spending limit is not enabled and also throws `Invalid Update` error unless it is either it is first spending after enabling or called after 24 hours have passed since the last update to ensure that users can't freely modify(increase or remove) the daily limit to spend more.
+`_isValidUpdate` returns false if the spendling limit is not enabled, and also throws `Invalid Update` error unless either it is first spending after enabling or called after 24 hours have passed since the last update to ensure that users can't freely modify(increase or remove) the daily limit to spend more.
 
 ### Checking if spendable
 
