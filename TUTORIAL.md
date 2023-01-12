@@ -160,7 +160,7 @@ Both `setSpendingLimit` and `removeSpendingLimit` can only be called by account 
 
         if(!limit.isEnabled) return;
 
-        uint timestamp = block.timestamp; // l1BatchTimestamp
+        uint timestamp = block.timestamp; // L1 batch timestamp
 
         if (limit.limit != limit.available && timestamp > limit.resetTime) {
             limit.resetTime = timestamp + ONE_DAY;
@@ -184,7 +184,6 @@ Both `setSpendingLimit` and `removeSpendingLimit` can only be called by account 
 ```solidity
 if(!limit.isEnabled) return;
 ```
-
 Before checking spending amount, it renews `resetTime` and `available` amount if a day has already passed since the last update : timestamp > resetTime. Or only `resetTime` is updated if it's the first spending after enabling limit. Otherwise, these processes are skipped.  
 
 ```solidity
@@ -206,6 +205,8 @@ require(limit.available >= _amount, 'Exceed daily limit');
 
 limit.available -= _amount;
 ```
+
+Plus, you might have noticed about the comment `// L1 batch timestamp` above. The details on this will be explained below. 
 
 ### Full code
 
@@ -326,159 +327,298 @@ contract SpendLimit {
 
 ```
 
-### Modification to Account contract
+### Account & Factory contracts
 
-That's pretty much for `SpendLimit`. Now, you also need to add `AAFactory.sol` and `Account.sol` from the existing tutorial on Account Abstraction. Those two contracts can be [downloadable here](https://github.com/matter-labs/custom-aa-tutorial/tree/main/contracts).
+That's pretty much for `SpendLimit`. Now, you also need to add `Account.sol` which is Account Abstraction wallet contract and its factory `AAFactory.sol`. As noted earlier, those two contracts are mostly based on the implementations of [another tutorial about Account Abstraction](https://v2-docs.zksync.io/dev/tutorials/custom-aa-tutorial.html#prerequisite).
 
-However, a change is needed: inserts a call `_checkSpendingLimit` from `_executeTransaction` of `TwoUserMultisig.sol` like below, which only gets triggered if `value` is non-zero.
+We are skipping the detailed explanation about how these two contracts work in this tutorial, but the primary difference is whether or not it has two signers, meaning that `Account.sol` in this tutorial doesn't implement multi-signature scheme but only needs single signature. Belows are the full codes.
+
+#### Account.sol
 
 ```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 
-    ・・・
+import "@matterlabs/zksync-contracts/l2/system-contracts/interfaces/IAccount.sol";
+import "@matterlabs/zksync-contracts/l2/system-contracts/TransactionHelper.sol";
+import "@openzeppelin/contracts/interfaces/IERC1271.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@matterlabs/zksync-contracts/l2/system-contracts/Constants.sol";
+import "@matterlabs/zksync-contracts/l2/system-contracts/SystemContractsCaller.sol";
+import "./SpendLimit.sol";
+
+contract Account is IAccount, IERC1271, SpendLimit { // imports SpendLimit contract
+
+    using TransactionHelper for Transaction;
+    
+    address public owner;
+
+    bytes4 constant EIP1271_SUCCESS_RETURN_VALUE = 0x1626ba7e;
+
+    modifier onlyBootloader() {
+        require(
+            msg.sender == BOOTLOADER_FORMAL_ADDRESS,
+            "Only bootloader can call this method"
+        );
+    
+        _;
+    }
+
+    constructor(address _owner) {
+        owner = _owner;
+    }
+
+    function validateTransaction(
+        bytes32,
+        bytes32 _suggestedSignedHash,
+        Transaction calldata _transaction
+    ) external payable override onlyBootloader {
+        _validateTransaction(_suggestedSignedHash, _transaction);
+    }
+
+    function _validateTransaction(
+        bytes32 _suggestedSignedHash,
+        Transaction calldata _transaction
+    ) internal {
+
+        SystemContractsCaller.systemCall(
+            uint32(gasleft()),
+            address(NONCE_HOLDER_SYSTEM_CONTRACT),
+            0,
+            abi.encodeCall(
+                INonceHolder.incrementMinNonceIfEquals,
+                (_transaction.reserved[0])
+            )
+        );
+
+        bytes32 txHash;
+
+        if (_suggestedSignedHash == bytes32(0)) {
+            txHash = _transaction.encodeHash();
+        } else {
+            txHash = _suggestedSignedHash;
+        }
+
+        require(
+            isValidSignature(txHash, _transaction.signature) ==
+                EIP1271_SUCCESS_RETURN_VALUE
+        );
+    }
+
+    function executeTransaction(
+        bytes32,
+        bytes32,
+        Transaction calldata _transaction
+    ) external payable override onlyBootloader {
+        _executeTransaction(_transaction);
+    }
 
     function _executeTransaction(Transaction calldata _transaction) internal {
         address to = address(uint160(_transaction.to));
         uint256 value = _transaction.reserved[1];
         bytes memory data = _transaction.data;
 
-        // This part //
+        // Call SpendLimit contract to ensure that ETH `value` doesn't exceed the daily spending limit
         if ( value > 0 ) {
-            _checkSpendingLimit(address(ETH_TOKEN_SYSTEM_CONTRACT), value);
-        }
-        // This part //
-
+           _checkSpendingLimit(address(ETH_TOKEN_SYSTEM_CONTRACT), value);
+        } 
+        
         if (to == address(DEPLOYER_SYSTEM_CONTRACT)) {
+            SystemContractsCaller.systemCall(
+                uint32(gasleft()),
+                to,
+                uint128(_transaction.reserved[1]),
+                _transaction.data
+            );
+        } else {
+            bool success;
+            assembly {
+                success := call(
+                    gas(),
+                    to,
+                    value,
+                    add(data, 0x20),
+                    mload(data),
+                    0,
+                    0
+                )
+            }
+            require(success);
+        }
+    }
 
-    ・・・
+    function executeTransactionFromOutside(Transaction calldata _transaction)
+        external
+        payable
+    {
+        _validateTransaction(bytes32(0), _transaction);
 
+        _executeTransaction(_transaction);
+    }
+
+    function isValidSignature(bytes32 _hash, bytes calldata _signature)
+        public
+        view
+        override
+        returns (bytes4)
+    {
+
+        require(owner == ECDSA.recover(_hash, _signature));
+        return EIP1271_SUCCESS_RETURN_VALUE;
+    }
+
+    function payForTransaction(
+        bytes32,
+        bytes32,
+        Transaction calldata _transaction
+    ) external payable override onlyBootloader {
+        bool success = _transaction.payToTheBootloader();
+        require(success, "Failed to pay the fee to the operator");
+    }
+
+    function prePaymaster(
+        bytes32,
+        bytes32,
+        Transaction calldata _transaction
+    ) external payable override onlyBootloader {
+        _transaction.processPaymasterInput();
+    }
+
+    receive() external payable {
+        assert(msg.sender != BOOTLOADER_FORMAL_ADDRESS);
+    }
+}
 ```
 
-Since we set the spending limit of ETH in this example, the first argument in `_checkSpendingLimit` is `address(ETH_TOKEN_SYSTEM_CONTRACT)`, which is imported from a system contract calld `system-contracts/Constant.sol`.
+The lines below call `_checkSpendingLimit` in SpendLimit contract to verify the allowance for spending if `value` in Transaction is non-zero.
 
-Note: The formal ETH address on zkSync is `0x000000000000000000000000000000000000800a`, neither the common one `0xEee...EEeE` used by protocols as a placeholder on Ethereum, nor `0x000...000` which you can use via utils of `zksync-web3` package ([See](https://v2-docs.zksync.io/api/js/utils.html#the-address-of-ether)).
+```solidity
+
+if ( value > 0 ) {
+    _checkSpendingLimit(address(ETH_TOKEN_SYSTEM_CONTRACT), value);
+} 
+```
+
+Since we set the spending limit of ETH in this example, the first argument in `_checkSpendingLimit` should be `address(ETH_TOKEN_SYSTEM_CONTRACT)` which is imported from a system contract calld `system-contracts/Constant.sol`.
+
+Note: The formal ETH address on zkSync is `0x000000000000000000000000000000000000800a`, neither the well-known `0xEee...EEeE` used by protocols as a placeholder on Ethereum, nor zero address `0x000...000` which `zksync-web3` package ([See](https://v2-docs.zksync.io/api/js/utils.html#the-address-of-ether)) provides as a more user-friendly alias.
+
+*hint: SpendLimit is token-agnostic, thus an extention is possible: another checking if the execution is ERC20 transfer by extracting the function slector in bytes from transaction calldata.
+
+#### AAFactory.sol
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@matterlabs/zksync-contracts/l2/system-contracts/Constants.sol";
+import "@matterlabs/zksync-contracts/l2/system-contracts/SystemContractsCaller.sol";
+
+contract AAFactory {
+    bytes32 public aaBytecodeHash;
+
+    constructor(bytes32 _aaBytecodeHash) {
+        aaBytecodeHash = _aaBytecodeHash;
+    }
+
+    function deployAccount(
+        bytes32 salt,
+        address owner
+    ) external returns (address accountAddress) {
+        (bool success, bytes memory returnData) = SystemContractsCaller
+            .systemCallWithReturndata(
+                uint32(gasleft()),
+                address(DEPLOYER_SYSTEM_CONTRACT),
+                uint128(0),
+                abi.encodeCall(
+                    DEPLOYER_SYSTEM_CONTRACT.create2Account,
+                    (salt, aaBytecodeHash, abi.encode(owner))
+                )
+            );
+        require(success, "Deployment failed");
+
+        (accountAddress, ) = abi.decode(returnData, (address, bytes));
+    }
+}
+```
+
+## Deploying the smart contract
 
 ### Compile
 
-Now, before deploying the contracts above, run:
+Finally, we are ready to deploy the contracts.  
+Yet before deploying the contracts , run:  
 
 ```shell
 yarn hardhat compile
 ```
 
-## Deploying the smart contract
-
-Finally, we are ready to deploy the contracts.
-
-Below is a file that combines `deploy-factory.ts` and `deploy-multisig.ts` in the tutorial on Account Abstraction. So, create `deploy-factory-multisig.ts` and copy&paste this sample code in it.
+So, let's create a file `deploy-factory-account.ts` that deploys all the contracts we've created above. 
 
 ```typescript
-import { utils, Wallet, Provider, EIP712Signer, types } from "zksync-web3";
-import * as ethers from "ethers";
-import { HardhatRuntimeEnvironment } from "hardhat/types";
-import { Deployer } from "@matterlabs/hardhat-zksync-deploy";
+import { utils, Wallet, Provider } from 'zksync-web3';
+import * as ethers from 'ethers';
+import { HardhatRuntimeEnvironment } from 'hardhat/types';
+import { Deployer } from '@matterlabs/hardhat-zksync-deploy';
 
 export default async function (hre: HardhatRuntimeEnvironment) {
-	const provider = new Provider("https://zksync2-testnet.zksync.dev");
-	const wallet = new Wallet("<WALLET_PRIVATE_KEY>", provider);
-	const deployer = new Deployer(hre, wallet);
-	const factoryArtifact = await deployer.loadArtifact("AAFactory");
-	const aaArtifact = await deployer.loadArtifact("TwoUserMultisig");
+  const provider = new Provider('https://zksync2-testnet.zksync.dev');
+  const wallet = new Wallet('<WALLET_PRIVATE_KEY>', provider);
+  const deployer = new Deployer(hre, wallet);
+  const factoryArtifact = await deployer.loadArtifact('AAFactory');
+  const aaArtifact = await deployer.loadArtifact('Account');
 
-	// If wallet on zkSync doesn't have enough funds.
-	// const depositAmount = ethers.utils.parseEther('0.1');
-	// const depositHandle = await deployer.zkWallet.deposit({
-	//   to: deployer.zkWallet.address,
-	//   token: utils.ETH_ADDRESS,
-	//   amount: depositAmount,
-	// });
-	// await depositHandle.wait();
+  // Bridge funds if wallet on zkSync doesn't have enough funds.
+  // const depositAmount = ethers.utils.parseEther('0.1');
+  // const depositHandle = await deployer.zkWallet.deposit({
+  //   to: deployer.zkWallet.address,
+  //   token: utils.ETH_ADDRESS,
+  //   amount: depositAmount,
+  // });
+  // await depositHandle.wait();
 
-	const factory = await deployer.deploy(
-		factoryArtifact,
-		[utils.hashBytecode(aaArtifact.bytecode)],
-		undefined,
-		[aaArtifact.bytecode]
-	);
+  const factory = await deployer.deploy(
+    factoryArtifact,
+    [utils.hashBytecode(aaArtifact.bytecode)], 
+    undefined,
+    [aaArtifact.bytecode,], 
+  );
 
-	console.log(`AA factory address: ${factory.address}`);
+  console.log(`AA factory address: ${factory.address}`);
 
-	const aaFactory = new ethers.Contract(
-		factory.address,
-		factoryArtifact.abi,
-		wallet
-	);
+  const aaFactory = new ethers.Contract(
+    factory.address,
+    factoryArtifact.abi,
+    wallet
+  );
 
-	const owner1 = Wallet.createRandom();
-	const owner2 = Wallet.createRandom();
-	console.log("owner1 pk: ", owner1.privateKey);
-	console.log("owner2 pk: ", owner2.privateKey);
+  const owner = Wallet.createRandom();
+  console.log("owner pk: ", owner.privateKey)
 
-	const salt = ethers.constants.HashZero;
+  const salt = ethers.constants.HashZero;
+  const tx = await aaFactory.deployAccount(salt, owner.address);
+  await tx.wait();
+  
+  const abiCoder = new ethers.utils.AbiCoder();
+  const accountAddress = utils.create2Address(
+    factory.address,
+    await aaFactory.aaBytecodeHash(),
+    salt,
+    abiCoder.encode(['address'], [owner.address])
+  );
 
-	const tx = await aaFactory.deployAccount(
-		salt,
-		owner1.address,
-		owner2.address
-	);
-	await tx.wait();
+  console.log(`Account deployed on address ${accountAddress}`);
 
-	const abiCoder = new ethers.utils.AbiCoder();
-	const multisigAddress = utils.create2Address(
-		factory.address,
-		await aaFactory.aaBytecodeHash(),
-		salt,
-		abiCoder.encode(["address", "address"], [owner1.address, owner2.address])
-	);
+  await (await wallet.sendTransaction({
+      to: accountAddress,
+      value: ethers.utils.parseEther('0.02')
+    })
+  ).wait();
 
-	console.log(`Multisig deployed on address ${multisigAddress}`);
-
-	await (
-		await wallet.sendTransaction({
-			to: multisigAddress,
-			value: ethers.utils.parseEther("0.01"),
-		})
-	).wait();
-
-	let aaTx = await aaFactory.populateTransaction.deployAccount(
-		salt,
-		Wallet.createRandom().address,
-		Wallet.createRandom().address
-	);
-
-	const gasLimit = await provider.estimateGas(aaTx);
-	const gasPrice = await provider.getGasPrice();
-
-	aaTx = {
-		...aaTx,
-		from: multisigAddress,
-		gasLimit: gasLimit,
-		gasPrice: gasPrice,
-		chainId: (await provider.getNetwork()).chainId,
-		nonce: await provider.getTransactionCount(multisigAddress),
-		type: 113,
-		customData: {
-			ergsPerPubdata: utils.DEFAULT_ERGS_PER_PUBDATA_LIMIT,
-		} as types.Eip712Meta,
-		value: ethers.BigNumber.from(0),
-	};
-	const signedTxHash = EIP712Signer.getSignedDigest(aaTx);
-
-	const signature = ethers.utils.concat([
-		ethers.utils.joinSignature(owner1._signingKey().signDigest(signedTxHash)),
-		ethers.utils.joinSignature(owner2._signingKey().signDigest(signedTxHash)),
-	]);
-
-	aaTx.customData = {
-		...aaTx.customData,
-		customSignature: signature,
-	};
-
-	const sentTx = await provider.sendTransaction(utils.serialize(aaTx));
-	await sentTx.wait();
 }
 ```
 
-Then, after changing `<WALLET_PRIVATE_KEY>`, run:
+After changing `<WALLET_PRIVATE_KEY>`, run:
 
 ```shell
 yarn hardhat deploy-zksync --script deploy/deploy-factory-multisig.ts
@@ -488,82 +628,70 @@ the oupput would look like the following:
 
 ```shell
 AA factory address: 0x9db333Cb68Fb6D317E3E415269a5b9bE7c72627Ds
-owner1 pk: 0x71b552f26d193ab45ca474e29895721f97607580cd671c6c46b8b163c1c62c2d
-owner2 pk: 0x84ea93d7a0b6f6c8de9c17a4dd0847c921d6f0963ac142fe2749880b814bdccb
-Multisig deployed on address 0xCEBc59558938bccb43A6C94769F87bBdb770E956
+owner pk: 0x957aff65500eda28beb7130b7c1bc48f783556bb84fa6874d2204c1d66a0ddc7
+Account deployed on address 0x6b6B8ea196a6F27EFE408288a4FEeBE9A9e12005
 ```
 
-So, we are ready to use `SpendLimit`. For the tests, now please open [zkSync2.0 testnet explorer](https://zksync2-testnet.zkscan.io/) and search for the deployed Multisig contract address on to be able to examine balances and transactions we will make in the next sections.
+So, we are ready to use `SpendLimit`. For the test, now please open [zkSync2.0 testnet explorer](https://zksync2-testnet.zkscan.io/) and search for the deployed Account contract address to be able to track balances and transactions we will make in the next sections.
 
 ## Set the daily spending limit
 
-First, please create `setLimit.ts` and after paste the example code below, replace the undefined multisig address and private key string values with the ones we got in the previous section.
+First, create `setLimit.ts` and after pasting the example code below, replace the undefined account address and private key string values with the ones we got in the previous section.
 
 To enable the daily spending limit, you need to call `setSpendingLimit` function with two parameters: token address and amount limit. Token address is ETH_ADDRESS and the limit parameter is "0.005" in the example below. (can be any number)
 
 ```typescript
-import {
-	utils,
-	Wallet,
-	Provider,
-	Contract,
-	EIP712Signer,
-	types,
-} from "zksync-web3";
-import * as ethers from "ethers";
-import { HardhatRuntimeEnvironment } from "hardhat/types";
+import { utils, Wallet, Provider, Contract, EIP712Signer, types} from 'zksync-web3';
+import * as ethers from 'ethers';
+import { HardhatRuntimeEnvironment } from 'hardhat/types';
 
-const ETH_ADDRESS = "0x000000000000000000000000000000000000800A";
-const MULTISIG_ADDRESS = "<MULTISIG_ADDRESS>";
+const ETH_ADDRESS = "0x000000000000000000000000000000000000800A"
+const ACCOUNT_ADDRESS = '<ACCOUNT_ADDRESS>'
 
-export default async function (hre: HardhatRuntimeEnvironment) {
-	const provider = new Provider("https://zksync2-testnet.zksync.dev");
-	const wallet = new Wallet("<WALLET_PRIVATE_KEY>", provider);
-	const owner1 = new Wallet("<OWNER1_PRIVATE_KEY>", provider);
-	const owner2 = new Wallet("<OWNER2_PRIVATE_KEY>", provider);
+export default async function (hre: HardhatRuntimeEnvironment) { 
+  const provider = new Provider('https://zksync2-testnet.zksync.dev');
+  const wallet = new Wallet('<WALLET_PRIVATE_KEY>', provider);
+  const owner = new Wallet('<OWNER_PRIVATE_KEY>', provider);
+  
+  const accountArtifact = await hre.artifacts.readArtifact('Account');
+  const account = new Contract(ACCOUNT_ADDRESS, accountArtifact.abi, wallet)
 
-	const multisigArtifact = await hre.artifacts.readArtifact("TwoUserMultisig");
-	const multisig = new Contract(MULTISIG_ADDRESS, multisigArtifact.abi, wallet);
+  let setLimitTx = await account.populateTransaction.setSpendingLimit(
+    ETH_ADDRESS, ethers.utils.parseEther("0.005")
+  )
 
-	let setLimitTx = await multisig.populateTransaction.setSpendingLimit(
-		ETH_ADDRESS,
-		ethers.utils.parseEther("0.005")
-	);
+  setLimitTx = {
+    ...setLimitTx,
+    from: ACCOUNT_ADDRESS,
+    chainId: (await provider.getNetwork()).chainId,
+    nonce: await provider.getTransactionCount(ACCOUNT_ADDRESS),
+    type: 113,
+    customData: {
+      ergsPerPubdata: utils.DEFAULT_ERGS_PER_PUBDATA_LIMIT,
+    } as types.Eip712Meta,
+    value: ethers.BigNumber.from(0)
+  }
 
-	setLimitTx = {
-		...setLimitTx,
-		from: MULTISIG_ADDRESS,
-		chainId: (await provider.getNetwork()).chainId,
-		nonce: await provider.getTransactionCount(MULTISIG_ADDRESS),
-		type: 113,
-		customData: {
-			ergsPerPubdata: utils.DEFAULT_ERGS_PER_PUBDATA_LIMIT,
-		} as types.Eip712Meta,
-		value: ethers.BigNumber.from(0),
-	};
+  setLimitTx.gasPrice = await provider.getGasPrice();
+  setLimitTx.gasLimit = await provider.estimateGas(setLimitTx)
 
-	setLimitTx.gasPrice = await provider.getGasPrice();
-	setLimitTx.gasLimit = await provider.estimateGas(setLimitTx);
+  const signedTxHash = EIP712Signer.getSignedDigest(setLimitTx); 
+  const signature = ethers.utils.arrayify(ethers.utils.joinSignature(owner._signingKey().signDigest(signedTxHash)))
 
-	const signedTxHash = EIP712Signer.getSignedDigest(setLimitTx);
-	const signature = ethers.utils.concat([
-		ethers.utils.joinSignature(owner1._signingKey().signDigest(signedTxHash)),
-		ethers.utils.joinSignature(owner2._signingKey().signDigest(signedTxHash)),
-	]);
+  setLimitTx.customData = {
+    ...setLimitTx.customData,
+    customSignature: signature,
+  };
 
-	setLimitTx.customData = {
-		...setLimitTx.customData,
-		customSignature: signature,
-	};
+  const sentTx = await provider.sendTransaction(utils.serialize(setLimitTx));
+  await sentTx.wait();
 
-	const sentTx = await provider.sendTransaction(utils.serialize(setLimitTx));
-	await sentTx.wait();
+  const limit = await account.limits(ETH_ADDRESS)
+  console.log("limit: ", limit.limit.toString())
+  console.log("available: ", limit.available.toString())
+  console.log("resetTime: ", limit.resetTime.toString())
+  console.log("Enabled: ", limit.isEnabled)
 
-	const limit = await multisig.limits(ETH_ADDRESS);
-	console.log("limit: ", limit.limit.toString());
-	console.log("available: ", limit.available.toString());
-	console.log("resetTime: ", limit.resetTime.toString());
-	console.log("Enabled: ", limit.isEnabled);
 }
 ```
 
@@ -578,66 +706,72 @@ Enabled:  true
 
 ## Perform ETH transfer
 
-Finally, we will see if SpendLimit contract works and refuses the ETH transfer that exceeds the daily limit. Let's create `transferETH.ts` with the example code below.
+Finally, we will see if SpendLimit contract works and refuses any ETH transfer that exceeds the daily limit. Let's create `transferETH.ts` with the example code below.
 
 ```typescript
-import {
-	utils,
-	Wallet,
-	Provider,
-	Contract,
-	EIP712Signer,
-	types,
-} from "zksync-web3";
-import * as ethers from "ethers";
-import { HardhatRuntimeEnvironment } from "hardhat/types";
+import { utils, Wallet, Provider, Contract, EIP712Signer, types} from 'zksync-web3';
+import * as ethers from 'ethers';
+import { HardhatRuntimeEnvironment } from 'hardhat/types';
 
-const ETH_ADDRESS = "0x000000000000000000000000000000000000800A";
-const MULTISIG_ADDRESS = "<MULTISIG_ADDRESS>";
+const ETH_ADDRESS = "0x000000000000000000000000000000000000800A"
+const ACCOUNT_ADDRESS = '<ACCOUNT_ADDRESS>'
 
-export default async function (hre: HardhatRuntimeEnvironment) {
-	const provider = new Provider("https://zksync2-testnet.zksync.dev");
-	const wallet = new Wallet("<WALLET_PRIVATE_KEY>", provider);
-	const owner1 = new Wallet("<OWNER1_PRIVATE_KEY>", provider);
-	const owner2 = new Wallet("<OWNER2_PRIVATE_KEY>", provider);
+export default async function (hre: HardhatRuntimeEnvironment) { 
+  const provider = new Provider('https://zksync2-testnet.zksync.dev');
+  const wallet = new Wallet('<WALLET_PRIVATE_KEY>', provider);
+  const owner = new Wallet('<OWNER_PRIVATE_KEY>', provider);
 
-	let ethTransferTx = {
-		from: MULTISIG_ADDRESS,
-		to: wallet.address,
-		chainId: (await provider.getNetwork()).chainId,
-		nonce: await provider.getTransactionCount(MULTISIG_ADDRESS),
-		type: 113,
-		customData: {
-			ergsPerPubdata: utils.DEFAULT_ERGS_PER_PUBDATA_LIMIT,
-		} as types.Eip712Meta,
-		value: ethers.utils.parseEther("0.0051"), // 0.0051 fails but 0.0049 succeeds
-		gasPrice: await provider.getGasPrice(),
-		gasLimit: ethers.BigNumber.from(10000000), // contant 10M since estimateGas() causes an error
-		data: "0x",
-	};
+    let ethTransferTx = {
+        from: ACCOUNT_ADDRESS,
+        to: wallet.address,
+        chainId: (await provider.getNetwork()).chainId,
+        nonce: await provider.getTransactionCount(ACCOUNT_ADDRESS),
+        type: 113,
+        customData: {
+          ergsPerPubdata: utils.DEFAULT_ERGS_PER_PUBDATA_LIMIT,
+        } as types.Eip712Meta,
+        value: ethers.utils.parseEther("0.0051"), // 0.0051 fails but 0.0049 succeeds
+        gasPrice: await provider.getGasPrice(),
+        gasLimit: ethers.BigNumber.from(20000000), // 20M since estimateGas() causes an error and this tx consumes more than 15M at most
+        data: "0x"
+      }
+      const signedTxHash = EIP712Signer.getSignedDigest(ethTransferTx); 
+      const signature = ethers.utils.arrayify(ethers.utils.joinSignature(owner._signingKey().signDigest(signedTxHash)))
+    
+      ethTransferTx.customData = {
+        ...ethTransferTx.customData,
+        customSignature: signature,
+      };
 
-	const signedTxHash = EIP712Signer.getSignedDigest(ethTransferTx);
-	const signature = ethers.utils.concat([
-		ethers.utils.joinSignature(owner1._signingKey().signDigest(signedTxHash)),
-		ethers.utils.joinSignature(owner2._signingKey().signDigest(signedTxHash)),
-	]);
+      const accountArtifact = await hre.artifacts.readArtifact('Account');
+      const account = new Contract(ACCOUNT_ADDRESS, accountArtifact.abi, wallet)
+      const limit = (await account.limits(ETH_ADDRESS))
 
-	ethTransferTx.customData = {
-		...ethTransferTx.customData,
-		customSignature: signature,
-	};
+      // L1 timestamp tends to be undefined in latest blocks. So should find the latest L1 Batch first.
+      let l1BatchRange = await provider.getL1BatchBlockRange(await provider.getL1BatchNumber())
+      let l1TimeStamp = (await provider.getBlock(l1BatchRange[1])).l1BatchTimestamp
 
-	const sentTx = await provider.sendTransaction(utils.serialize(ethTransferTx));
-	await sentTx.wait();
+      console.log("l1TimeStamp: ", l1TimeStamp)
+      console.log("resetTime: ", limit.resetTime.toString())
 
-	const multisigArtifact = await hre.artifacts.readArtifact("TwoUserMultisig");
-	const multisig = new Contract(MULTISIG_ADDRESS, multisigArtifact.abi, wallet);
+      // avoid unnecessary errors due to the delay in timestamp of L1 batch
+      // first spending after enabling of limit is ignored
+      if ( l1TimeStamp > limit.resetTime.toNumber() || limit.limit == limit.available )  {
+         const sentTx = await provider.sendTransaction(utils.serialize(ethTransferTx));
+         await sentTx.wait();
 
-	const limit = await multisig.limits(ETH_ADDRESS);
-	console.log("limit: ", limit.limit.toString());
-	console.log("available: ", limit.available.toString());
-	console.log("resetTime: ", limit.resetTime.toString());
-	console.log("Enabled: ", limit.isEnabled);
+         const limit = await account.limits(ETH_ADDRESS)
+         console.log("limit: ", limit.limit.toString())
+         console.log("available: ", limit.available.toString())
+         console.log("resetTime: ", limit.resetTime.toString())
+         console.log("Enabled: ", limit.isEnabled)
+
+         return;
+      } else {
+         let wait = Math.round((limit.resetTime.toNumber() - l1TimeStamp) / 60)
+         console.log("Tx would fail due to apx ", wait, " mins difference in timestamp between resetTime and l1 batch")
+      }
+
 }
 ```
 
@@ -655,33 +789,84 @@ An unexpected error occurred:
 Error: transaction failed...
 ```
 
-Then, it's recommended to rerun the code with a different ETH amount that doesn't exceed the limit, say "0.0049", to ensure that the SpendLimit contract doesn't refuse the amount less than the limit.
+Then, it's recommended to rerun the code with a different ETH amount that doesn't exceed the limit, say "0.0049", to ensure that the SpendLimit contract doesn't refuse the amount less than the limit.  
 
 If the transaction succeeds, the output would be like the following:
 
 ```shell
+l1TimeStamp:  1673530137
+resetTime:  1673529801
 limit:  5000000000000000
 available:  100000000000000
+New resetTime: 1673530575
 ```
 
-The value `available` in Limit struct was decremented, and now only 0.0001 ETH is available for transfer.
+The value `available` in Limit struct was decremented, so now only 0.0001 ETH is available for transfer.  
 
-Then, now if we want to transfer more than the current available amount, 0.0001 ETH, we are supposed to wait 24 hours so that the reset will happen and the available amount will recover.
+Since the `ONE_DAY` is set to 1 minute only for this test, another transfer with any amount less than the limit is supposed to succeed accordingly after a minute instead of 24 hours. However, the second transfer wouldn't succeed but we need to wait for apx 10 more mins at least. This is where we need to know about a constrain with regard to `block.timestamp` on the current zkSync testnet first.  
 
-Nevertheless, since the `ONE_DAY` is set to 60 only for this test, another transfer with any amount less than the limit would succeed accordingly after a minute. Let's change the value for ETH transfer, say "0.003", and after a minute, run:
+As [the documentation explains](https://v2-docs.zksync.io/dev/developer-guides/transactions/blocks.html#block-properties), `block.timestamp` on zkSync testnet returns timestamp in the latest L1 batch, a batch of dozens of L2 blocks, instead of the one in L2 blocks. And timestamp of the latest L1 batch is only updated once in a 5~10 minutes as far as it's observed.   
+
+For the referemce, the difference in the latest timestamp between L2 block and L1 batch can be checked the method below:
+```typescript
+const l1BatchRange = await provider.getL1BatchBlockRange(await provider.getL1BatchNumber())
+const l1TimeStamp = (await provider.getBlock(l1BatchRange[1])).l1BatchTimestamp
+const l2TimeStamp = (await provider.getBlock(blockNum)).timestamp
+
+console.log("l1TimeStamp: ", l1TimeStamp)
+console.log("l2TimeStamp: ", l2TimeStamp)
+
+```
+
+The second transfer fails due to the delay of the timestamp update in the latest L1 batch. Technically, transfer execution goes wrong in such a way where the return of the if-else condition `timestamp > limit.resetTime` in `_checkSpendingLimit` function can't be true so as to update `available` since `timestamp` of apx 10-15 minutes ago isn't greater than `resetTime`. As a result, `available` value remains the same even after 1 minute, causing 'Exceed daily limit' error.  
+
+```solidity
+if (limit.limit != limit.available && timestamp > limit.resetTime) {
+      limit.resetTime = timestamp + ONE_DAY;
+      limit.available = limit.limit;
+}
+
+・・・
+
+require(limit.available >= _amount, 'Exceed daily limit');
+	    
+```
+
+It seems that this issue is only problematic for testing in this tutorial. This is because 10-15 minutes delay is still negligible in production where the contract requires 24 hours until `available` is restored. Though, now we have to test the second transfer to see if everything goes as expected except this matter.
+
+So, let's run the same code again with the value, say "0.003":
 
 ```shell
 yarn hardhat deploy-zksync --script deploy/transferETH.ts
 
 ```
 
-The reset was carried out successfully, which made another transfer possible.
+It may succeed if 5-10 minutes have already passed since the last successfull transfer transaction and L1 batch timestamp is updated to a new value that is greater than resetTime. Available amount was successfully restored before comparing it with amount, which made another transfer possible.
 
 ```shell
+l1TimeStamp:  1673530137
+resetTime:  1673529801
 limit:  5000000000000000
 available: 2000000000000000 // 0.005 - 0.003 = 0.002
 
 ```
+
+Otherwise, we will probably see the output mostly like below. 
+
+```shell
+l1TimeStamp:  1673529741
+resetTime:  1673529801
+Tx would fail due to apx  X  mins difference in timestamp between resetTime and l1 batch
+```
+In this case, the transaction wasn't triggered to avoid the unnecessary error due to the delay in timestamp of L1 batch. Please try running the script again after more than 5-10 minutes.
+
+Note: `X mins difference` above doesn't indicate that the transaction will be sent and successfull after X mins. It can be sent when the timestamp update occurs to the latest L1 batch and probably succeed if its timestamp is bigger than `resetTime`. 
+
+## Common Errors
+
+- Insufficient gasLimit: Transactions often fail due to insufficient gasLimit. Please increase the value manually when transactions fail without clear reasons.
+- 
+
 
 ## Complete Project
 
