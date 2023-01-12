@@ -114,7 +114,6 @@ contract Account is IAccount, IERC1271, SpendLimit {
         payable
     {
         _validateTransaction(bytes32(0), _transaction);
-
         _executeTransaction(_transaction);
     }
 
@@ -124,7 +123,6 @@ contract Account is IAccount, IERC1271, SpendLimit {
         override
         returns (bytes4)
     {
-
         require(owner == ECDSA.recover(_hash, _signature));
         return EIP1271_SUCCESS_RETURN_VALUE;
     }
