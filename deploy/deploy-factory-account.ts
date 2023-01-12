@@ -34,16 +34,13 @@ export default async function (hre: HardhatRuntimeEnvironment) {
     wallet
   );
 
-  // The owner of the account
   const owner = Wallet.createRandom();
   console.log("owner pk: ", owner.privateKey)
 
-    // For the simplicity of the tutorial, we will use zero hash as salt
   const salt = ethers.constants.HashZero;
   const tx = await aaFactory.deployAccount(salt, owner.address);
   await tx.wait();
 
-  // Getting the address of the deployed contract
   const abiCoder = new ethers.utils.AbiCoder();
   const accountAddress = utils.create2Address(
     factory.address,
