@@ -80,13 +80,10 @@ contract Account is IAccount, IERC1271, SpendLimit {
         uint256 value = _transaction.reserved[1];
         bytes memory data = _transaction.data;
 
-        // Call SpendLimit contract to make sure that ETH `value` doesn't exceed
-        // the daily spending limit for specific token which this account enabled
+        // Call SpendLimit contract to ensure that ETH `value` doesn't exceed the daily spending limit
         if ( value > 0 ) {
            _checkSpendingLimit(address(ETH_TOKEN_SYSTEM_CONTRACT), value);
         } 
-
-        // SpendLimit contract is token-agnostic, a check when ERC20 transfer can also be added.
         
         if (to == address(DEPLOYER_SYSTEM_CONTRACT)) {
             SystemContractsCaller.systemCall(
