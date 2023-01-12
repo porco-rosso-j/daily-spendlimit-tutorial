@@ -26,40 +26,46 @@ export async function consoleLimit(limit) {
     )
   }
 
-export async function consoleAddreses(wallet, factory, account, user1, user2) {
+export async function consoleAddreses(wallet, factory, account, user) {
     console.log(
         '\n',
         '-- Addresses -- ','\n',
         '- Wallet: ', wallet.address, '\n',
         '- Factory: ', factory.address, '\n',
         '- Account: ', account.address, '\n',
-        '- User1: ', user1.address, '\n',
-        '- User2: ', user2.address, '\n',
+        '- User: ', user.address, '\n',
         '\n',
       )
   }
 
-  export async function getBalances(provider, wallet, account, user1) {
+  export async function getBalances(provider, wallet, account, user) {
 
     const WalletETHBal = await provider.getBalance(wallet.address)
     const AccountETHBal = await provider.getBalance(account.address)
-    const User1ETHBal = await provider.getBalance(user1.address)
+    const UserETHBal = await provider.getBalance(user.address)
   
     console.log(
         '\n',
         'Balances', '\n',
         '- Wallet ETH balance: ', WalletETHBal.toString(), '\n',
         '- Account ETH balance: ', AccountETHBal.toString(), '\n',
-        '- User1 ETH balance: ', User1ETHBal.toString(), '\n',
+        '- User ETH balance: ', UserETHBal.toString(), '\n',
         '\n',
       )
   
     const balances = {
         WalletETHBal, 
         AccountETHBal, 
-        User1ETHBal 
+        UserETHBal 
     }
   
     return balances
     
+  }
+
+  export async function fakeTxs(wallet: Wallet, loop:number) {
+    let i:number = 0;
+    for (i; i < loop ; i++) {
+      await wallet.sendTransaction({to:wallet.address, value: 1});
+    }
   }

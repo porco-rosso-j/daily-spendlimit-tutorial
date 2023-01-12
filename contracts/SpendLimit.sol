@@ -3,13 +3,13 @@ pragma solidity ^0.8.0;
 
 contract SpendLimit {
     
-    // uint public ONE_DAY = 86400; // 24 hours
-    uint public ONE_DAY = 60; // seconds
+    // uint public ONE_DAY = 24 hours in production but 1 min for tutorial
+    uint public ONE_DAY = 1 minutes;
 
     /// This struct serves as data storage of daily limits users enable
     /// limit: amount of daily spending limit 
     /// available: available amount that can be spent 
-    /// resetTime: block.timestamp either at the activation or at each reset event.
+    /// resetTime: block.timestamp at the available amount is restored
     /// isEnabled: true when the daily spending limit is enabled
     struct Limit {
         uint limit;
@@ -18,9 +18,7 @@ contract SpendLimit {
         bool isEnabled;
     }
 
-    // mapping to 
-    // token => Limit
-    mapping(address => Limit) public limits; 
+    mapping(address => Limit) public limits; // token => Limit
 
     modifier onlyAccount() {
         require(
@@ -35,55 +33,78 @@ contract SpendLimit {
     /// @param _amount non-zero limit.
     function setSpendingLimit(address _token, uint _amount) public onlyAccount {
         require(_amount != 0, "Invalid amount");
-        _updateLimit(_token, _amount, _amount, block.timestamp, true);
+
+        uint resetTime;
+        uint timestamp = block.timestamp;
+
+        if (isValidUpdate(_token)) {
+            resetTime = timestamp + ONE_DAY;
+        } else {
+            resetTime = timestamp;
+        }
+        
+        _updateLimit(_token, _amount, _amount, resetTime, true);
     } 
 
-    /// this function disables an active daily spending limit,
-    /// decreasing each uint number in Limit struct to zero and making isEnabled false.
+    // this function disables an active daily spending limit,
+    // decreasing each uint number in Limit struct to zero and making isEnabled false.
     function removeSpendingLimit(address _token) public onlyAccount {
+        require(isValidUpdate(_token), "Invalid Update");
         _updateLimit(_token, 0, 0, 0, false);
     }
 
-    /// this is a storage-modifying internal function called by either setSpendingLimit or removeSpendingLimit
+    // verify if the update to a Limit struct is valid
+    // Ensure that users can't freely modify(increase or remove) the daily limit to spend more.
+    function isValidUpdate(address _token) internal view returns(bool) {
+
+        // Reverts unless it is first spending after enabling 
+        // or called after 24 hours have passed since last update.
+        if (limits[_token].isEnabled) {
+            require(limits[_token].limit == limits[_token].available || block.timestamp > limits[_token].resetTime,
+                "Invalid Update");
+
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    // storage-modifying private function called by either setSpendingLimit or removeSpendingLimit
     function _updateLimit(address _token, uint _limit, uint _available, uint _resetTime, bool _isEnabled) private {
         Limit storage limit = limits[_token];
-
-        // Reverts unless it is called after 24 hours have passed since last update.
-        // Ensure that users can't freely modify(increase or remove) the daily limit to spend more.
-        require(block.timestamp >= limit.resetTime + ONE_DAY, "Invalid update");
-
         limit.limit = _limit;
         limit.available = _available;
         limit.resetTime = _resetTime;
         limit.isEnabled = _isEnabled;
     }
 
-    /// this function is called by account before execution.
-    /// Verify an account is able to spend a given amount of token and records a new available amount.
+    // this function is called by account before execution.
+    // Verify an account is able to spend a given amount of token and records a new available amount.
     function _checkSpendingLimit(address _token, uint _amount) internal {
         Limit memory limit = limits[_token];
 
-        // return if spending limit is disabled
+        // return if spending limit hasn't been enabled yet
         if(!limit.isEnabled) return;
 
-        // Resetting Limit struct state, which is only performed...
-        // if a day has already passed since either activation or last reset.
-        if (block.timestamp >= limit.resetTime + ONE_DAY) {
-            limit.resetTime = block.timestamp;
+        uint timestamp = block.timestamp; // l1BatchTimestamp
+
+        // Renew resetTime and available amount, which is only performed...
+        // either if a day has already passed: timestamp > resetTime,
+        // or at the first spending after enabling limit
+        if (limit.limit != limit.available && timestamp > limit.resetTime) {
+            limit.resetTime = timestamp + ONE_DAY;
             limit.available = limit.limit;
+
+        } else if (limit.limit == limit.available) {
+            limit.resetTime = timestamp + ONE_DAY;
         }
 
-        // reverts if amount exceeds the remaining limit. 
+        // reverts if amount exceeds the remaining available amount. 
         require(limit.available >= _amount, 'Exceed daily limit');
 
         // decrement `available` 
         limit.available -= _amount;
         limits[_token] = limit;
-    }
-
-    // testing purpose: can set it to 10~30 sec.
-    function changeONE_DAY(uint _time) public {
-        ONE_DAY = _time;
     }
 
 }

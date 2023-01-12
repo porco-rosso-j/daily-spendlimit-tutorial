@@ -3,3 +3,4 @@ cache-zk
 local-setup
 node_modules
 .env
+package-lock.json

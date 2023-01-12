@@ -1,7 +1,7 @@
 import { Wallet, Contract, Provider, utils, EIP712Signer, types } from "zksync-web3";
 import { ethers } from "ethers";
 
-   export async function sendTx(provider: Provider, account:Contract, user1:Wallet, user2:Wallet, tx:any) {
+   export async function sendTx(provider: Provider, account:Contract, user:Wallet, tx:any) {
 
     tx = {
         ...tx,
@@ -20,10 +20,7 @@ import { ethers } from "ethers";
     }
 
     const signedTxHash = EIP712Signer.getSignedDigest(tx);
-    const signature = ethers.utils.concat([
-        ethers.utils.joinSignature(user1._signingKey().signDigest(signedTxHash)),
-        ethers.utils.joinSignature(user2._signingKey().signDigest(signedTxHash)),
-    ])
+    const signature = ethers.utils.arrayify(ethers.utils.joinSignature(user._signingKey().signDigest(signedTxHash)))
   
     tx.customData = {
       ...tx.customData,

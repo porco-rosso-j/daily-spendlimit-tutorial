@@ -7,14 +7,13 @@ import "@openzeppelin/contracts/interfaces/IERC1271.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@matterlabs/zksync-contracts/l2/system-contracts/Constants.sol";
 import "@matterlabs/zksync-contracts/l2/system-contracts/SystemContractsCaller.sol";
-import "./SpendLimit.sol";
+import "./TestSpendLimit.sol";
 
-contract TwoUserMultisig is IAccount, IERC1271, SpendLimit {
+contract TestAccount is IAccount, IERC1271, TestSpendLimit {
 
     using TransactionHelper for Transaction;
     
-    address public owner1;
-    address public owner2;
+    address public owner;
 
     bytes4 constant EIP1271_SUCCESS_RETURN_VALUE = 0x1626ba7e;
 
@@ -27,9 +26,8 @@ contract TwoUserMultisig is IAccount, IERC1271, SpendLimit {
         _;
     }
 
-    constructor(address _owner1, address _owner2) {
-        owner1 = _owner1;
-        owner2 = _owner2;
+    constructor(address _owner) {
+        owner = _owner;
     }
 
     function validateTransaction(
@@ -87,6 +85,8 @@ contract TwoUserMultisig is IAccount, IERC1271, SpendLimit {
         if ( value > 0 ) {
            _checkSpendingLimit(address(ETH_TOKEN_SYSTEM_CONTRACT), value);
         } 
+
+        // SpendLimit contract is token-agnostic, a check when ERC20 transfer can also be added.
         
         if (to == address(DEPLOYER_SYSTEM_CONTRACT)) {
             SystemContractsCaller.systemCall(
@@ -127,14 +127,8 @@ contract TwoUserMultisig is IAccount, IERC1271, SpendLimit {
         override
         returns (bytes4)
     {
-        require(_signature.length == 130, "Signature length is incorrect");
 
-        address recoveredAddr1 = ECDSA.recover(_hash, _signature[0:65]);
-        address recoveredAddr2 = ECDSA.recover(_hash, _signature[65:130]);
-
-        require(recoveredAddr1 == owner1);
-        require(recoveredAddr2 == owner2);
-
+        require(owner == ECDSA.recover(_hash, _signature));
         return EIP1271_SUCCESS_RETURN_VALUE;
     }
 
